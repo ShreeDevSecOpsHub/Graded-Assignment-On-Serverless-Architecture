@@ -84,21 +84,131 @@ def lambda_handler(event, context):
 ### 2. Automated S3 Bucket Cleanup
 **File:** `assignment2_s3_cleanup.py`
 
-*(Paste the code I gave you earlier - remember to update bucket name)*
+```python
+import boto3
+from datetime import datetime, timedelta, timezone
+import logging
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+BUCKET_NAME = 'your-bucket-name-here'   # Change this
+
+def lambda_handler(event, context):
+    s3 = boto3.client('s3')
+    now = datetime.now(timezone.utc)
+    threshold = now - timedelta(days=30)
+    
+    deleted = []
+    paginator = s3.get_paginator('list_objects_v2')
+    
+    for page in paginator.paginate(Bucket=BUCKET_NAME):
+        if 'Contents' not in page:
+            continue
+        for obj in page['Contents']:
+            if obj['LastModified'] < threshold:
+                s3.delete_object(Bucket=BUCKET_NAME, Key=obj['Key'])
+                deleted.append(obj['Key'])
+                logger.info(f"Deleted: {obj['Key']}")
+    
+    print(f"Deleted {len(deleted)} objects older than 30 days")
+    return {'statusCode': 200, 'deleted_count': len(deleted)}
+```
 
 ---
 
 ### 3. Monitor Unencrypted S3 Buckets
 **File:** `assignment3_s3_encryption_check.py`
 
-*(Paste the code I gave you earlier)*
+```python
+import boto3
+import logging
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+def lambda_handler(event, context):
+    s3 = boto3.client('s3')
+    unencrypted = []
+    
+    # List all buckets
+    buckets = s3.list_buckets()['Buckets']
+    
+    for bucket in buckets:
+        bucket_name = bucket['Name']
+        try:
+            encryption = s3.get_bucket_encryption(Bucket=bucket_name)
+            # If it reaches here, encryption is configured
+            logger.info(f"Bucket {bucket_name} is encrypted")
+        except s3.exceptions.ClientError as e:
+            if 'ServerSideEncryptionConfigurationNotFoundError' in str(e):
+                unencrypted.append(bucket_name)
+                logger.warning(f"Unencrypted bucket found: {bucket_name}")
+            else:
+                logger.error(f"Error checking {bucket_name}: {str(e)}")
+    
+    if unencrypted:
+        print(f"Unencrypted buckets: {unencrypted}")
+    else:
+        print("All buckets have encryption enabled.")
+    
+    return {
+        'statusCode': 200,
+        'unencrypted_buckets': unencrypted
+    }
+```
 
 ---
 
 ### 4. Automatic EBS Snapshot & Cleanup
 **File:** `assignment4_ebs_snapshot.py`
 
-*(Paste the code I gave you earlier - update VOLUME_ID)*
+```python
+import boto3
+from datetime import datetime, timedelta, timezone
+import logging
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+VOLUME_ID = 'vol-XXXXXXXXXXXXXXXXX'   # Change this
+RETENTION_DAYS = 30
+
+def lambda_handler(event, context):
+    ec2 = boto3.client('ec2')
+    now = datetime.now(timezone.utc)
+    
+    # Create new snapshot
+    snapshot = ec2.create_snapshot(
+        VolumeId=VOLUME_ID,
+        Description=f"Automated backup of {VOLUME_ID} at {now}"
+    )
+    snapshot_id = snapshot['SnapshotId']
+    logger.info(f"Created snapshot: {snapshot_id}")
+    print(f"Created snapshot: {snapshot_id}")
+    
+    # Cleanup old snapshots
+    snapshots = ec2.describe_snapshots(
+        Filters=[{'Name': 'volume-id', 'Values': [VOLUME_ID]}]
+    )['Snapshots']
+    
+    deleted = []
+    threshold = now - timedelta(days=RETENTION_DAYS)
+    
+    for snap in snapshots:
+        snap_time = snap['StartTime']
+        if snap_time < threshold and snap['SnapshotId'] != snapshot_id:
+            ec2.delete_snapshot(SnapshotId=snap['SnapshotId'])
+            deleted.append(snap['SnapshotId'])
+            logger.info(f"Deleted old snapshot: {snap['SnapshotId']}")
+    
+    print(f"Deleted {len(deleted)} old snapshots")
+    return {
+        'statusCode': 200,
+        'new_snapshot': snapshot_id,
+        'deleted_count': len(deleted)
+    }
+```
 
 ---
 
